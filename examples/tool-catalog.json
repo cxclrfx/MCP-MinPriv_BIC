@@ -1,0 +1,12 @@
+{
+  "tools": [
+    {"name": "files.read"},
+    {"name": "files.write"},
+    {"name": "github.search_code"},
+    {"name": "github.push"},
+    {"name": "github.delete_repo"},
+    {"name": "shell.exec"},
+    {"name": "secrets.read_token"},
+    {"name": "payments.transfer"}
+  ]
+}

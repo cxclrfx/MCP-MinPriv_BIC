@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MCP MinPriv_BIC — Least-Privilege Learner</title><style>:root{color-scheme:light dark;--bg:#0d1117;--panel:#161b22;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--ok:#3fb950;--warn:#d29922;--bad:#f85149;--accent:#a371f7}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}main{max-width:1100px;margin:auto;padding:36px 20px 80px}h1{font-size:34px;margin:0 0 8px}p{line-height:1.55}.muted{color:var(--muted)}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}input[type=file]{width:100%;padding:12px;border:1px dashed var(--line);border-radius:10px}button{background:var(--accent);color:#130022;border:0;border-radius:9px;padding:11px 16px;font-weight:800;cursor:pointer}button:disabled{opacity:.45}.actions{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}.stat b{font-size:26px;display:block}table{width:100%;border-collapse:collapse;font-size:14px}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.warn{color:var(--warn)}.ok{color:var(--ok)}#policy{white-space:pre-wrap;background:#0b0f14;border-radius:10px;padding:12px;overflow:auto;max-height:340px}@media(max-width:800px){.grid,.stats{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}}</style></head>
+<body><main>
+<h1>MCP MinPriv_BIC</h1><p class="muted">Observed tools AND available tools → a smaller, reviewable allowlist. Entirely local; nothing is uploaded.</p><p><code>AVAILABLE ∧ OBSERVED → CATALOG-CONSTRAINED OBSERVED ALLOWLIST</code></p>
+<div class="grid"><section class="card"><h2>Tool-call logs</h2><p class="muted">JSON or JSONL from an agent, MCP gateway, coding assistant, audit log, or transcript.</p><input id="logs" type="file" accept=".json,.jsonl,.ndjson,.txt"><div id="logsInfo" class="muted"></div></section><section class="card"><h2>Optional tool catalog</h2><p class="muted">Select the authoritative tool list to constrain the proposed allowlist and report observed names that are outside the catalog.</p><input id="catalog" type="file" accept=".json,.jsonl,.ndjson,.txt"><div id="catalogInfo" class="muted"></div></section></div>
+<div class="actions"><button id="analyze" disabled>Build least-privilege profile</button><button id="download" disabled>Download policy.json</button></div>
+<section id="result" hidden><div class="stats"><div class="stat"><span class="muted">Calls found</span><b id="sCalls">0</b></div><div class="stat"><span class="muted">Unique tools used</span><b id="sUsed">0</b></div><div class="stat"><span class="muted">Risk-signaled tools</span><b id="sRisk">0</b></div><div class="stat"><span class="muted">Unused catalog tools</span><b id="sUnused">0</b></div></div><h2>Observed tools</h2><table><thead><tr><th>Tool</th><th>Calls</th><th>Heuristic risk</th><th>Safe event summary</th></tr></thead><tbody id="toolsBody"></tbody></table><h2>Generated policy</h2><pre id="policy"></pre></section>
+<section class="card"><h2>What this is</h2><p>With a catalog, MCP MinPriv_BIC proposes the intersection of observed and cataloged tools, reports catalog tools that were not observed, and separately reports observed names outside the catalog. Without a catalog, the proposed allowlist is observed-use only.</p><p class="muted">This is evidence from observed workloads, not proof that unused tools will never be needed. Review before enforcement.</p></section>
+<script>
+"use strict";
+const APP_VERSION="1.0.2",$=id=>document.getElementById(id);let parsedLogs=null,parsedCatalog=null,report=null;
+let inputEpoch={logs:0,catalog:0},inputStatus={logs:"absent",catalog:"absent"};
+function parseAny(text){const t=text.trim();if(!t)throw new Error("Empty file");try{return JSON.parse(t)}catch(_){}return t.split(/\r?\n/).filter(x=>x.trim()).map((line,i)=>{try{return JSON.parse(line)}catch(e){throw new Error(`Invalid JSON/JSONL at line ${i+1}: ${e.message}`)}})}
+async function loadFile(file){return parseAny(await file.text())}
+const RISK_RULES=[{label:"destructive",re:/(delete|remove|drop|truncate|destroy|wipe|purge|revoke|terminate|kill)/i},{label:"write",re:/(write|create|update|edit|patch|put|post|commit|push|merge|deploy|publish|send|upload)/i},{label:"execution",re:/(exec|execute|shell|bash|powershell|cmd|terminal|run_command|sudo)/i},{label:"secrets",re:/(secret|token|credential|password|keychain|private_key|apikey|api_key)/i},{label:"money",re:/(payment|transfer|withdraw|trade|swap|purchase|refund|invoice)/i},{label:"admin",re:/(admin|owner|permission|role|acl|policy|iam|grant)/i}];
+function riskFor(name){const labels=RISK_RULES.filter(r=>r.re.test(name)).map(r=>r.label);return labels.length?labels:["none"]}
+function safeEventSummary(obj){if(!obj||typeof obj!=="object")return String(obj).slice(0,180);const out={};for(const k of ["type","event","kind","method","name","tool_name","tool","recipient"]){if(typeof obj[k]==="string")out[k]=obj[k]}if(obj.function&&typeof obj.function.name==="string")out.function_name=obj.function.name;for(const k of ["input","arguments","args"]){const v=obj[k]??(k==="arguments"?obj.function?.arguments:undefined);if(v&&typeof v==="object"&&!Array.isArray(v))out[`${k}_keys`]=Object.keys(v).slice(0,12)}return JSON.stringify(out).slice(0,260)}
+function addCall(out,name,path,obj){if(typeof name!=="string")return;const n=name.trim();if(!n||n==="all"||n==="none")return;out.push({name:n,path,example:safeEventSummary(obj)})}
+const OPAQUE_CALL_PAYLOAD_KEYS=new Set(["input","arguments","args","result","output"]);
+function extractCalls(root){const calls=[];function walk(v,path,depth){if(depth>40)throw new Error(`Log traversal depth limit exceeded at ${path}`);if(v==null)return;if(Array.isArray(v)){v.forEach((x,i)=>walk(x,`${path}[${i}]`,depth+1));return}if(typeof v!=="object")return;const local=new Set(),type=String(v.type||v.event||v.kind||"").toLowerCase(),method=String(v.method||"");if(method==="tools/call"&&typeof v.params?.name==="string")local.add(v.params.name);if(type==="tool_use"&&typeof v.name==="string")local.add(v.name);if(/tool.*call|function.*call|tool_use|tool_invocation/.test(type)&&typeof v.name==="string")local.add(v.name);if(typeof v.tool_name==="string")local.add(v.tool_name);if(typeof v.tool==="string"&&(/call|invoke|execution|tool/.test(type)||v.arguments||v.args||v.input))local.add(v.tool);if(v.function&&typeof v.function.name==="string"&&(v.arguments||v.function.arguments||/call/.test(type)))local.add(v.function.name);if(typeof v.recipient==="string"&&(v.author?.role==="assistant"||v.role==="assistant")&&v.recipient!=="all")local.add(v.recipient);for(const n of local)addCall(calls,n,path,v);for(const[k,x]of Object.entries(v)){if(k==="arguments"||k==="args"||k==="result"||(local.size&&OPAQUE_CALL_PAYLOAD_KEYS.has(k)))continue;if(method==="tools/call"&&typeof v.params?.name==="string"&&k==="params")continue;if(local.size&&k==="function"&&v.function&&typeof v.function.name==="string")continue;walk(x,path?`${path}.${k}`:k,depth+1)}}walk(root,"$",0);return calls}
+function extractCatalog(root){
+ const names=new Set();
+ function walk(v,depth=0){
+  if(depth>30)throw new Error("Catalog traversal depth limit exceeded");
+  if(typeof v==="string"){if(!v.trim())throw new Error("Empty catalog tool name");names.add(v.trim());return}
+  if(Array.isArray(v)){for(const x of v)walk(x,depth+1);return}
+  if(!v||typeof v!=="object")throw new Error("Unsupported catalog structure");
+  if(typeof v.name==="string"){walk(v.name,depth+1);return}
+  if(typeof v.tool_name==="string"){walk(v.tool_name,depth+1);return}
+  if(v.type==="function"&&typeof v.function?.name==="string"){walk(v.function.name,depth+1);return}
+  let recognized=false;
+  for(const key of ["tools","functions","catalog","allowedTools"]){if(Object.hasOwn(v,key)){recognized=true;walk(v[key],depth+1)}}
+  if(Object.hasOwn(v,"servers")){recognized=true;const servers=v.servers;if(!servers||typeof servers!=="object")throw new Error("Unsupported servers catalog");for(const server of Object.values(servers))walk(server,depth+1)}
+  if(!recognized)throw new Error("Unsupported catalog structure");
+ }
+ walk(root);return [...names].sort()
+}
+function escapeHTML(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function invalidateReport(){report=null;$("result").hidden=true;$("download").disabled=true;$("policy").textContent="";$("toolsBody").innerHTML=""}
+function analyzeData(logs,catalogInput){const calls=extractCalls(logs),byTool=new Map();for(const c of calls){if(!byTool.has(c.name))byTool.set(c.name,{name:c.name,count:0,examples:[]});const x=byTool.get(c.name);x.count++;if(x.examples.length<3)x.examples.push(c.example)}const used=[...byTool.values()].sort((a,b)=>b.count-a.count||a.name.localeCompare(b.name)),hasCatalog=catalogInput!==null&&catalogInput!==undefined,catalog=hasCatalog?extractCatalog(catalogInput):[],usedNames=used.map(x=>x.name),usedSet=new Set(usedNames),catalogSet=new Set(catalog),unused=catalog.filter(x=>!usedSet.has(x)),outsideCatalog=hasCatalog?usedNames.filter(x=>!catalogSet.has(x)):[],allowedTools=hasCatalog?usedNames.filter(x=>catalogSet.has(x)):usedNames,risky=used.filter(x=>riskFor(x.name)[0]!=="none");return{hasCatalog,calls,used,catalog,unused,outsideCatalog,risky,policyObj:{generated_by:"MCP MinPriv_BIC",application_version:APP_VERSION,generated_at:new Date().toISOString(),evidence:{observed_tool_calls:calls.length,unique_tools_observed:used.length,catalog_tools:hasCatalog?catalog.length:null},proposed_policy:{allowedTools,deniedOrUnobservedTools:hasCatalog?unused:[],observedOutsideCatalog:outsideCatalog,note:hasCatalog?"Catalog-constrained observed-use allowlist. Observed names outside the catalog are reported but not allowed. Review before enforcement.":"Observed-use allowlist without catalog constraint. Review before enforcement."},risk_signals:risky.map(x=>({tool:x.name,categories:riskFor(x.name),calls:x.count})),usage:used.map(x=>({tool:x.name,calls:x.count}))}}}
+function analyze(){try{if(!inputsReady())throw new Error("Select valid inputs and wait for loading to finish.");const x=analyzeData(parsedLogs,parsedCatalog);report=x.policyObj;$("sCalls").textContent=x.calls.length;$("sUsed").textContent=x.used.length;$("sRisk").textContent=x.risky.length;$("sUnused").textContent=x.hasCatalog?x.unused.length:"—";$("toolsBody").innerHTML=x.used.map(row=>{const risks=riskFor(row.name);return`<tr><td><code>${escapeHTML(row.name)}</code></td><td>${row.count}</td><td class="${risks[0]==="none"?"ok":"warn"}">${escapeHTML(risks.join(", "))}</td><td>${escapeHTML(row.examples[0]||"")}</td></tr>`}).join("")||`<tr><td colspan="4">No tool calls detected. Check log format.</td></tr>`;$("policy").textContent=JSON.stringify(report,null,2);$("result").hidden=false;$("download").disabled=false}catch(e){invalidateReport();alert(e.message);console.error(e)}}
+function download(){if(!report)throw new Error("No current report. Rebuild after changing inputs.");const blob=new Blob([JSON.stringify(report,null,2)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`mcp_minpriv_policy_${new Date().toISOString().replace(/[:.]/g,"-")}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000)}
+function inputsReady(){return inputStatus.logs==="ready"&&(inputStatus.catalog==="absent"||inputStatus.catalog==="ready")}
+function refreshAnalyze(){ $("analyze").disabled=!inputsReady() }
+async function onInputChange(kind){
+ const epoch=++inputEpoch[kind];invalidateReport();
+ const file=$(kind).files[0];
+ inputStatus[kind]=file?"loading":"absent";
+ if(kind==="logs")parsedLogs=null;else parsedCatalog=null;
+ $(kind+"Info").textContent=file?"Loading…":"No file selected.";refreshAnalyze();
+ if(!file)return;
+ try{
+  const parsed=await loadFile(file);
+  if(epoch!==inputEpoch[kind])return;
+  if(parsed===null||typeof parsed!=="object")throw new Error("Expected a JSON object or array");
+  const count=kind==="logs"?extractCalls(parsed).length:extractCatalog(parsed).length;
+  if(kind==="logs")parsedLogs=parsed;else parsedCatalog=parsed;
+  inputStatus[kind]="ready";
+  $(kind+"Info").textContent=kind==="logs"?`Loaded. ${count} candidate tool-call events detected.`:`Loaded. ${count} tool names detected.`;
+ }catch(e){
+  if(epoch!==inputEpoch[kind])return;
+  inputStatus[kind]="error";
+  $(kind+"Info").textContent="Could not load input. Check JSON syntax, supported structure, and traversal limits.";
+ }
+ refreshAnalyze();
+}
+$("logs").addEventListener("change",()=>onInputChange("logs"));
+$("catalog").addEventListener("change",()=>onInputChange("catalog"));
+$("analyze").addEventListener("click",analyze);$("download").addEventListener("click",download);
+</script></main></body></html>

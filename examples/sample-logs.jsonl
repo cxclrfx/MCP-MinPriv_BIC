@@ -1,0 +1,5 @@
+{"type":"tool_use","name":"files.read","input":{"path":"README.md"}}
+{"type":"tool_use","name":"github.search_code","input":{"query":"rateLimit"}}
+{"method":"tools/call","params":{"name":"files.read","arguments":{"path":"INSTRUCTIONS.md"}}}
+{"type":"tool_use","name":"shell.exec","input":{"command":"node --test tests/minpriv.test.cjs"}}
+{"tool_name":"github.search_code","args":{"query":"Retry-After"}}

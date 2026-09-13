@@ -1,0 +1,29 @@
+# Real logs and generated reports should not be committed by default
+*.log
+*.jsonl
+policy*.json
+report*.json
+*.har
+*.ndjson
+*.zip
+.env
+.env.*
+*token*
+*cookie*
+*credential*
+*.pem
+*.key
+mcp_minpriv_policy_*.json
+exports/
+private-logs/
+work/
+
+# Keep repository examples
+!examples/sample-logs.jsonl
+!examples/tool-catalog.json
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
